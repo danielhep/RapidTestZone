@@ -1,0 +1,9 @@
+{
+    "mongoUrl": "mongodb://localhost:27017/gtfs",
+    "agencies": [
+      {
+        "agency_key": "whatcom-transit-authority",
+        "url": "https://github.com/whatcomtrans/publicwtadata/blob/master/GTFS/wta_gtfs_latest.zip"
+      }
+    ]
+  }
