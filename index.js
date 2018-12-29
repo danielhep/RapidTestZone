@@ -5,16 +5,20 @@ const _ = require('lodash')
 const Trips = require('gtfs/models/gtfs/trip')
 const StopTimes = require('gtfs/models/gtfs/stop-time')
 const Routes = require('gtfs/models/gtfs/route')
+const Stops = require('gtfs/models/gtfs/stop')
 
-const routeNames = ['14', '190']
-const stopId = 208
+const routeNames = ['80S', '108S']
+const stopCode = 2083
 
 mongoose.connect(mongoURI, { useNewUrlParser: true })
 var db = mongoose.connection
 db.on('error', console.error.bind(console, 'connection error:'))
 db.once('open', async function () {
+  // find bus stop ID from google maps ID
+  let stops = await Stops.find({ stop_code: stopCode }, 'stop_id').exec()
+  let stopId = stops[0].stop_id
   // get a list of route ids from route names
-  let routes = await Routes.find({ route_short_name: { $in: routeNames } }).exec()
+  let routes = await Routes.find({ route_short_name: { $in: routeNames } }, 'route_id route_short_name').exec()
   let routeIds = []
   routes.forEach(item => {
     routeIds.push(item.route_id)
@@ -27,6 +31,7 @@ db.once('open', async function () {
   })
   // times for the above trips at a specific stop
   let stopTimes = await StopTimes.find(
+    // pickup type 0: picks up passengers
     { trip_id: { $in: tripIds }, stop_id: stopId, pickup_type: 0 },
     'trip_id departure_time',
     { sort: { departure_time: 1 } }
@@ -36,5 +41,4 @@ db.once('open', async function () {
     let routeName = _.find(routes, { route_id: routeId }).route_short_name
     console.log(`Route ${routeName} departing at ${stopTime.departure_time}`)
   })
-  // console.log(stopTimes)
 })
