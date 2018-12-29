@@ -1,8 +1,9 @@
 const mongoose = require('mongoose')
-const { DateTime, Interval, Duration } = require('luxon')
+const { DateTime, Interval } = require('luxon')
 const mongoURI = 'mongodb://localhost:27017/gtfs'
 const _ = require('lodash')
-const colors = require('colors')
+require('colors') // changes string prototype
+const { table } = require('table')
 
 const Trips = require('gtfs/models/gtfs/trip')
 const StopTimes = require('gtfs/models/gtfs/stop-time')
@@ -13,8 +14,10 @@ const CalendarDates = require('gtfs/models/gtfs/calendar-date')
 
 const log = console.log
 
-const routeNames = ['80S', '190S', '190', '14', '108', '11', '108S']
-const stopCode = 2083
+const routeNames = []
+// const routeNames = [108, 190]
+// const routeNames = ['80S', '190S', '190', '14', '108', '11', '108S', '14S]
+const stopCode = 2103
 const frequentService = 15
 
 const searchDate = DateTime.local(2019, 1, 9)
@@ -47,60 +50,99 @@ db.once('open', async function () {
     }
   })
 
-  log(serviceIds)
   // find bus stop ID from google maps ID
   let stops = await Stops.find({ stop_code: stopCode }, 'stop_id').exec()
   let stopId = stops[0].stop_id
+
   // get a list of route ids from route names
-  let routes = await Routes.find({ route_short_name: { $in: routeNames } }, 'route_id route_short_name').exec()
-  let routeIds = []
-  routes.forEach(item => {
-    routeIds.push(item.route_id)
-  })
+  let query = routeNames.length ? { route_short_name: { $in: routeNames } } : {}
+  let routes = await Routes.find(query, 'route_id route_short_name').exec()
+  let routeIds = _.map(routes, 'route_id')
   // get a list of trips for routes
-  let trips = await Trips.find(
-    { route_id: { $in: routeIds }, service_id: { $in: serviceIds } },
-    'trip_id route_id service_id'
-  ).exec()
-  let tripIds = []
-  trips.forEach(item => {
-    tripIds.push(item.trip_id)
-  })
+  let trips
+  if (!routeNames.length) {
+    trips = await Trips.find(
+      { service_id: { $in: serviceIds } },
+      'trip_id route_id service_id trip_headsign'
+    ).exec()
+  } else {
+    trips = await Trips.find(
+      { route_id: { $in: routeIds }, service_id: { $in: serviceIds } },
+      'trip_id route_id service_id trip_headsign'
+    ).exec()
+  }
+  let tripIds = _.map(trips, 'trip_id')
   // times for the above trips at a specific stop
   let stopTimes = await StopTimes.find(
     // pickup type 0: picks up passengers
     { trip_id: { $in: tripIds }, stop_id: stopId, pickup_type: 0 },
-    'trip_id departure_time',
-    { sort: { departure_time: 1 } }
+    'trip_id departure_time'
   ).exec()
+  // sort them so we can get the first item to prefille "last time"
+  stopTimes = _.sortBy(stopTimes, s => DateTime.fromFormat(s.departure_time, 'H:mm:ss'))
+  let lastTime = DateTime.fromFormat(stopTimes[0].departure_time, 'H:mm:ss')
   let departures = []
+  let firstRun = true
   stopTimes.forEach(stopTime => {
-    let routeId = _.find(trips, { trip_id: stopTime.trip_id }).route_id
-    let routeName = _.find(routes, { route_id: routeId }).route_short_name
+    let trip = _.find(trips, { trip_id: stopTime.trip_id })
+    let routeId = trip.route_id
+    let route = _.find(routes, { route_id: routeId })
+    let routeName = route.route_short_name
+    let tripHeadsign = trip.trip_headsign
+    let time = DateTime.fromFormat(stopTime.departure_time, 'H:mm:ss')
+    let spacing = firstRun ? undefined : Interval.fromDateTimes(lastTime, time).length('minutes')
+    firstRun = false
+    lastTime = time
     departures.push({
       routeId,
       routeName,
-      time: DateTime.fromFormat(stopTime.departure_time, 'H:mm:ss')
+      time,
+      spacing,
+      tripHeadsign
     })
   })
 
-  departures.sort((a, b) => (a.time.toSeconds() - b.time.toSeconds()))
-
-  let lastTime = departures[0].time
-  let hourlyStats = {}
-  let avg = 0; let cnt = 0
-
+  lastTime = departures[0].time
+  let routeStats = {}
   departures.forEach(item => {
     if (lastTime.hour !== item.time.hour) {
       log(`------- ${item.time.toFormat("h' 'a")} ------- `)
     }
-    let timeSinceLast = Math.round(Interval.fromDateTimes(lastTime, item.time).length('minutes'))
+    let timeSinceLast = Math.round(item.spacing) | 0
     let timeSinceLastString = timeSinceLast > frequentService ? String(timeSinceLast).red : String(timeSinceLast).green
-    log(`Route ${item.routeName}`.yellow + ` departing at ${item.time.toLocaleString(DateTime.TIME_SIMPLE)} (${timeSinceLastString})`)
+    log(`Route ${item.routeName} ${item.tripHeadsign}`.yellow + ` departing at ${item.time.toLocaleString(DateTime.TIME_SIMPLE)} (${timeSinceLastString})`)
     lastTime = item.time
-    cnt++
-    avg += timeSinceLast
+    _.set(routeStats, `${item.routeName}.cnt`, (_.get(routeStats, `${item.routeName}.cnt`) | 0) + 1)
   })
-  avg /= cnt
-  log(`Average time between departures: ${avg}`)
+
+  // Statistics
+
+  let spacing = _.flatMap(departures, n => {
+    return n.spacing
+  })
+  spacing.sort((a, b) => a - b)
+
+  var half = _.floor(spacing.length / 2)
+  // find median
+  let median
+  if (spacing.length % 2) {
+    median = spacing[half]
+  } else {
+    median = (spacing[half - 1] + spacing[half]) / 2.0
+  }
+  // find other stats
+  let max = _.maxBy(departures, n => n.spacing)
+  let min = _.minBy(departures, n => n.spacing)
+  let mostFreuqentRoute = _.maxBy(_.toPairs(routeStats), n => n[1].cnt)
+  let leastFreuqentRoute = _.minBy(_.toPairs(routeStats), n => n[1].cnt)
+  let data =
+  [[`Average time between departures:`, `${_.round(_.mean(spacing), 2)} minutes`],
+    [`Median time between departures:`, `${_.round(median, 2)} minutes`],
+    [`Max time between departures:`, `${_.round(max.spacing, 2)} minutes`],
+    [`Min time between departures:`, `${_.round(min.spacing, 2)} minutes`],
+    [`Most trips by one route:`, `${mostFreuqentRoute[0]} with ${mostFreuqentRoute[1].cnt} trips`],
+    [`Least trips by one route:`, `${leastFreuqentRoute[0]} with ${leastFreuqentRoute[1].cnt} trips`]
+  ]
+  log(table(data))
+  process.exit()
 })
