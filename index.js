@@ -5,6 +5,8 @@ const _ = require('lodash')
 require('colors') // changes string prototype
 const { table } = require('table')
 
+const { findMedian } = require('./support')
+
 const Trips = require('gtfs/models/gtfs/trip')
 const StopTimes = require('gtfs/models/gtfs/stop-time')
 const Routes = require('gtfs/models/gtfs/route')
@@ -14,10 +16,10 @@ const CalendarDates = require('gtfs/models/gtfs/calendar-date')
 
 const log = console.log
 
-const routeNames = []
-// const routeNames = [108, 190]
-// const routeNames = ['80S', '190S', '190', '14', '108', '11', '108S', '14S]
-const stopCode = 2103
+const routeNames = ['232']
+// const routeNames = ['190S']
+// const routeNames = ['80S', '190S', '190', '14', '108', '11', '108S', '14S', '107']
+const stopCode = 3206
 const frequentService = 15
 
 const searchDate = DateTime.local(2019, 1, 9)
@@ -117,31 +119,32 @@ db.once('open', async function () {
 
   // Statistics
 
+  // get total count
+  let totalCnt = _.reduce(routeStats, (sum, r) => sum + r.cnt, 0)
+
   let spacing = _.flatMap(departures, n => {
     return n.spacing
   })
-  spacing.sort((a, b) => a - b)
+  let spacingNoNearZero = _.filter(spacing, s => s > 2)
 
-  var half = _.floor(spacing.length / 2)
-  // find median
-  let median
-  if (spacing.length % 2) {
-    median = spacing[half]
-  } else {
-    median = (spacing[half - 1] + spacing[half]) / 2.0
-  }
+  let median = findMedian(spacing)
+  let medianNNZ = findMedian(spacingNoNearZero)
   // find other stats
   let max = _.maxBy(departures, n => n.spacing)
   let min = _.minBy(departures, n => n.spacing)
   let mostFreuqentRoute = _.maxBy(_.toPairs(routeStats), n => n[1].cnt)
   let leastFreuqentRoute = _.minBy(_.toPairs(routeStats), n => n[1].cnt)
   let data =
-  [[`Average time between departures:`, `${_.round(_.mean(spacing), 2)} minutes`],
+  [
+    [`Average time between departures:`, `${_.round(_.mean(spacing), 2)} minutes`],
+    [`Average time between departures (<2 removed):`, `${_.round(_.mean(spacingNoNearZero), 2)} minutes`],
     [`Median time between departures:`, `${_.round(median, 2)} minutes`],
+    [`Median time between departures (<2 removed):`, `${_.round(medianNNZ, 2)} minutes`],
     [`Max time between departures:`, `${_.round(max.spacing, 2)} minutes`],
     [`Min time between departures:`, `${_.round(min.spacing, 2)} minutes`],
     [`Most trips by one route:`, `${mostFreuqentRoute[0]} with ${mostFreuqentRoute[1].cnt} trips`],
-    [`Least trips by one route:`, `${leastFreuqentRoute[0]} with ${leastFreuqentRoute[1].cnt} trips`]
+    [`Least trips by one route:`, `${leastFreuqentRoute[0]} with ${leastFreuqentRoute[1].cnt} trips`],
+    [`Total trips`, `${totalCnt} runs`]
   ]
   log(table(data))
   process.exit()
