@@ -4,9 +4,9 @@ const config = {
   mongoUrl: 'mongodb://localhost:27017/gtfs',
   agencies: [
     {
-      agency_key: 'whatcom-transit-authority',
+      agency_key: 'Santa Cruz Metro',
       // url: 'https://github.com/whatcomtrans/publicwtadata/blob/master/GTFS/wta_gtfs_latest.zip'
-      path: '/home/danielhep/Downloads/publicwtadata-master/GTFS/wta_gtfs_latest.zip'
+      path: '/home/danielhep/Downloads/gtfs.zip'
     }
   ]
 }

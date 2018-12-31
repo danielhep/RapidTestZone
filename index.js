@@ -1,6 +1,5 @@
 const mongoose = require('mongoose')
 const { DateTime, Interval } = require('luxon')
-const mongoURI = 'mongodb://localhost:27017/gtfs'
 const _ = require('lodash')
 require('colors') // changes string prototype
 const { table } = require('table')
@@ -16,60 +15,67 @@ const CalendarDates = require('gtfs/models/gtfs/calendar-date')
 
 const log = console.log
 
-const routeNames = ['232']
-// const routeNames = ['190S']
+const mongoURI = 'mongodb://localhost:27017/gtfs'
+const agencyKey = 'whatcom-transit-authority'
+// const routeNames = []
+const routeNames = ['190', '14']
 // const routeNames = ['80S', '190S', '190', '14', '108', '11', '108S', '14S', '107']
-const stopCode = 3206
+const stopCode = 2083
 const frequentService = 15
-
 const searchDate = DateTime.local(2019, 1, 9)
+// const searchDate = DateTime.local()
 mongoose.connect(mongoURI, { useNewUrlParser: true })
 var db = mongoose.connection
 db.on('error', console.error.bind(console, 'connection error:'))
 db.once('open', async function () {
   // get today's date, service codes for today's date
   let dayName = searchDate.toFormat('EEEE').toLowerCase()
-  let calendars = await Calendars.find().exec()
+  let calendars = await Calendars.find({ agency_key: agencyKey }).exec()
   let serviceIds = []
   calendars.forEach(item => {
     // also ensure that today is within the valid date range
     let startDate = DateTime.fromFormat(item.start_date.toString(), 'yyyyLLdd')
     let endDate = DateTime.fromFormat(item.end_date.toString(), 'yyyyLLdd')
     let interval = Interval.fromDateTimes(startDate, endDate)
-    if (item[dayName] && interval.contains(searchDate)) { serviceIds.push(item.service_id) }
+
+    if (item[dayName] && interval.contains(searchDate)) {
+      serviceIds.push(item.service_id)
+    }
   })
 
   // add service IDs for calendar-dates
-  let calendarDates = await CalendarDates.find().exec()
+  let calendarDates = await CalendarDates.find({ agency_key: agencyKey }).exec()
   calendarDates.forEach(item => {
     let date = DateTime.fromFormat(item.date.toString(), 'yyyyLLdd')
     if (+date === +searchDate) {
       if (item.exception_type === 1) {
         serviceIds.push(item.service_id)
+        log(item.service_id)
       } else if (item.exception_type === 2) {
-        serviceIds = _.remove(serviceIds, item.service_id)
+        // log(item.service_id)
+        _.pull(serviceIds, item.service_id)
       }
     }
   })
 
   // find bus stop ID from google maps ID
-  let stops = await Stops.find({ stop_code: stopCode }, 'stop_id').exec()
+  let stops = await Stops.find({ stop_code: stopCode, agency_key: agencyKey }, 'stop_id').exec()
   let stopId = stops[0].stop_id
 
   // get a list of route ids from route names
-  let query = routeNames.length ? { route_short_name: { $in: routeNames } } : {}
+  let query = routeNames.length ? { route_short_name: { $in: routeNames }, agency_key: agencyKey } : { agency_key: agencyKey }
   let routes = await Routes.find(query, 'route_id route_short_name').exec()
   let routeIds = _.map(routes, 'route_id')
   // get a list of trips for routes
   let trips
   if (!routeNames.length) {
     trips = await Trips.find(
-      { service_id: { $in: serviceIds } },
+      { service_id: { $in: serviceIds }, agency_key: agencyKey },
       'trip_id route_id service_id trip_headsign'
     ).exec()
   } else {
     trips = await Trips.find(
-      { route_id: { $in: routeIds }, service_id: { $in: serviceIds } },
+      { route_id: { $in: routeIds }, service_id: { $in: serviceIds }, agency_key: agencyKey },
       'trip_id route_id service_id trip_headsign'
     ).exec()
   }
@@ -77,7 +83,7 @@ db.once('open', async function () {
   // times for the above trips at a specific stop
   let stopTimes = await StopTimes.find(
     // pickup type 0: picks up passengers
-    { trip_id: { $in: tripIds }, stop_id: stopId, pickup_type: 0 },
+    { trip_id: { $in: tripIds }, stop_id: stopId, pickup_type: 0, agency_key: agencyKey },
     'trip_id departure_time'
   ).exec()
   // sort them so we can get the first item to prefille "last time"
@@ -125,8 +131,8 @@ db.once('open', async function () {
   let spacing = _.flatMap(departures, n => {
     return n.spacing
   })
+  spacing.shift() // remove the first item since it's not applicable
   let spacingNoNearZero = _.filter(spacing, s => s > 2)
-
   let median = findMedian(spacing)
   let medianNNZ = findMedian(spacingNoNearZero)
   // find other stats
